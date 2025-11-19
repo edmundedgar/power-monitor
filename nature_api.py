@@ -139,4 +139,61 @@ class NatureAPI:
                 logger.warning(f"Unexpected response format: {type(response)}")
                 return []
         return []
+    
+    def get_instantaneous_power(self, appliance_id: str = None, quiet: bool = False) -> Optional[Dict]:
+        """
+        Get instantaneous power consumption from ECHONET Lite appliances
+        
+        Args:
+            appliance_id: Optional appliance ID to filter. If None, returns first appliance found.
+            quiet: If True, suppress INFO level logging (useful for polling)
+        
+        Returns:
+            Dict with 'power_watts', 'power_kw', 'appliance_name', 'updated_at', or None if not found
+        """
+        # Temporarily adjust logging level if quiet mode
+        old_level = None
+        if quiet:
+            old_level = logger.level
+            logger.setLevel(logging.WARNING)
+        
+        try:
+            appliances = self.get_echonetlite_appliances()
+            if not appliances:
+                return None
+        finally:
+            # Restore logging level
+            if quiet and old_level is not None:
+                logger.setLevel(old_level)
+        
+        # Find the appliance (by ID if provided, otherwise first one)
+        appliance = None
+        if appliance_id:
+            appliance = next((a for a in appliances if a.get('id') == appliance_id), None)
+        else:
+            appliance = appliances[0] if appliances else None
+        
+        if not appliance:
+            return None
+        
+        # Extract instantaneous power (EPC e7)
+        properties = appliance.get('properties', [])
+        for prop in properties:
+            epc = prop.get('epc', '').lower()
+            if epc == 'e7':
+                try:
+                    val = prop.get('val', '')
+                    power_watts = int(val, 16)
+                    return {
+                        'power_watts': power_watts,
+                        'power_kw': power_watts / 1000.0,
+                        'appliance_name': appliance.get('nickname', 'Unknown'),
+                        'appliance_id': appliance.get('id', ''),
+                        'updated_at': prop.get('updated_at', ''),
+                    }
+                except (ValueError, TypeError):
+                    logger.error(f"Failed to parse power value: {prop.get('val')}")
+                    return None
+        
+        return None
 
