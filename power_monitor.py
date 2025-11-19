@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import signal
+from collections import deque
 from datetime import datetime
 from dateutil import parser as date_parser
 from dotenv import load_dotenv
@@ -146,17 +147,22 @@ def main():
     
     # Polling configuration
     # API updates data every 60 seconds
-    # Poll 60 seconds after last updated time + 1 second buffer
+    # Poll 60 seconds after last updated time + adaptive buffer
     UPDATE_INTERVAL = 60  # seconds
-    BUFFER_SECONDS = 1    # buffer to account for slight delays
+    BUFFER_SECONDS = 1    # buffer to account for slight delays (adaptive, min 1, max 10)
     last_updated_at_str = None
     last_updated_timestamp = None
     
     # Backoff configuration for when updates don't arrive
     backoff_count = 0
-    BACKOFF_INITIAL = 5   # Start with 5 seconds
+    BACKOFF_INITIAL = 2   # Start with 2 seconds
     BACKOFF_MAX = 60      # Max 60 seconds between polls
     BACKOFF_MULTIPLIER = 1.5  # Multiply by this each time
+    
+    # Track backoff history for adaptive buffer adjustment
+    # True = backoff occurred, False = new data received
+    backoff_history = deque(maxlen=100)  # Track last 100 polls
+    was_high_backoff = False  # Track if we were in high backoff state previously
     
     try:
         while not shutdown_requested:
@@ -183,17 +189,21 @@ def main():
                 
                 if is_new_data:
                     # New data arrived - reset backoff and display
-                    new_indicator = "🆕"
-                    print(f"[{timestamp}] {new_indicator} Instantaneous Power: {power_watts:>6} W ({power_kw:>7.3f} kW) | Updated: {updated_at_str}")
+                    power_indicator = "⚡"
+                    print(f"[{timestamp}] {power_indicator} Instantaneous Power: {power_watts:>6} W ({power_kw:>7.3f} kW) | Updated: {updated_at_str}")
                     last_updated_at_str = updated_at_str
                     last_updated_timestamp = updated_at_ts
                     backoff_count = 0  # Reset backoff counter
+                    backoff_history.append(False)  # Record: no backoff needed
                 else:
                     # Same data - we're waiting for an update
                     backoff_count += 1
                     # Calculate backoff wait time (exponential backoff with max cap)
                     backoff_wait = min(BACKOFF_INITIAL * (BACKOFF_MULTIPLIER ** (backoff_count - 1)), BACKOFF_MAX)
                     print(f"[{timestamp}] ⏳ Waiting for update... (backoff: {backoff_wait:.1f}s) | Current: {power_watts} W | Last updated: {updated_at_str}")
+                    
+                    if backoff_count > 0:
+                        backoff_history.append(True)  # Record: backoff occurred
                     
                     # Sleep with backoff
                     sleep_until = time.time() + backoff_wait
@@ -209,7 +219,34 @@ def main():
                     time.sleep(5)
                     continue
             
-            # Calculate next poll time: 60 seconds after last update + 1 second buffer
+            # Adaptive buffer adjustment based on backoff history
+            # Only adjust if we have enough history
+            if len(backoff_history) >= 10:
+                # Check last 10 polls for backoff frequency
+                # Convert deque to list for slicing (deque doesn't support slicing)
+                history_list = list(backoff_history)
+                recent_backoffs = sum(history_list[-10:])
+                is_high_backoff = recent_backoffs > 2
+                
+                # Only increase buffer when we cross the threshold (transition from low to high)
+                if is_high_backoff and not was_high_backoff:
+                    # Too many backoffs in last 10 polls - increase buffer
+                    if BUFFER_SECONDS < 10:
+                        BUFFER_SECONDS += 1
+                        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📈 Increased buffer to {BUFFER_SECONDS}s (backoffs: {recent_backoffs}/10)")
+                
+                was_high_backoff = is_high_backoff
+            
+            if len(backoff_history) >= 100:
+                # Check last 100 polls for backoff frequency
+                total_backoffs = sum(backoff_history)
+                if total_backoffs == 0:
+                    # No backoffs in last 100 polls - decrease buffer
+                    if BUFFER_SECONDS > 1:
+                        BUFFER_SECONDS -= 1
+                        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📉 Decreased buffer to {BUFFER_SECONDS}s (no backoffs in last 100 polls)")
+            
+            # Calculate next poll time: 60 seconds after last update + adaptive buffer
             # (Only reached if we got new data)
             if last_updated_timestamp is not None:
                 next_poll_time = last_updated_timestamp + UPDATE_INTERVAL + BUFFER_SECONDS
