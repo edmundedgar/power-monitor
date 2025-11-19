@@ -163,6 +163,7 @@ def main():
     # True = backoff occurred, False = new data received
     backoff_history = deque(maxlen=100)  # Track last 100 polls
     was_high_backoff = False  # Track if we were in high backoff state previously
+    waiting_for_update = None  # Track which update timestamp we're currently waiting for
     
     try:
         while not shutdown_requested:
@@ -194,6 +195,7 @@ def main():
                     last_updated_at_str = updated_at_str
                     last_updated_timestamp = updated_at_ts
                     backoff_count = 0  # Reset backoff counter
+                    waiting_for_update = None  # No longer waiting
                     backoff_history.append(False)  # Record: no backoff needed
                 else:
                     # Same data - we're waiting for an update
@@ -202,8 +204,11 @@ def main():
                     backoff_wait = min(BACKOFF_INITIAL * (BACKOFF_MULTIPLIER ** (backoff_count - 1)), BACKOFF_MAX)
                     print(f"[{timestamp}] ⏳ Waiting for update... (backoff: {backoff_wait:.1f}s) | Current: {power_watts} W | Last updated: {updated_at_str}")
                     
-                    if backoff_count > 0:
-                        backoff_history.append(True)  # Record: backoff occurred
+                    # Only add to history if this is the first backoff for this update
+                    # (don't count multiple retries of the same update as separate backoffs)
+                    if waiting_for_update != updated_at_str:
+                        backoff_history.append(True)  # Record: backoff occurred for this update
+                        waiting_for_update = updated_at_str
                     
                     # Sleep with backoff
                     sleep_until = time.time() + backoff_wait
@@ -220,8 +225,19 @@ def main():
                     continue
             
             # Adaptive buffer adjustment based on backoff history
-            # Only adjust if we have enough history
-            if len(backoff_history) >= 10:
+            # Check for 3 total backoffs first (even without 10 data points)
+            total_backoffs = sum(backoff_history)
+            if total_backoffs >= 3:
+                # 3 or more backoffs total - increase buffer immediately
+                if BUFFER_SECONDS < 10:
+                    BUFFER_SECONDS += 1
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📈 Increased buffer to {BUFFER_SECONDS}s ({total_backoffs} backoffs in {len(backoff_history)} polls)")
+                    # Reset history when buffer increases
+                    backoff_history.clear()
+                    was_high_backoff = False
+            
+            # Also check last 10 polls if we have enough history
+            elif len(backoff_history) >= 10:
                 # Check last 10 polls for backoff frequency
                 # Convert deque to list for slicing (deque doesn't support slicing)
                 history_list = list(backoff_history)
@@ -234,8 +250,13 @@ def main():
                     if BUFFER_SECONDS < 10:
                         BUFFER_SECONDS += 1
                         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📈 Increased buffer to {BUFFER_SECONDS}s (backoffs: {recent_backoffs}/10)")
-                
-                was_high_backoff = is_high_backoff
+                        # Reset history when buffer increases
+                        backoff_history.clear()
+                        was_high_backoff = False
+                    else:
+                        was_high_backoff = is_high_backoff
+                else:
+                    was_high_backoff = is_high_backoff
             
             if len(backoff_history) >= 100:
                 # Check last 100 polls for backoff frequency
