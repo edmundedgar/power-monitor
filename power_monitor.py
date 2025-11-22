@@ -258,14 +258,14 @@ def main():
                 else:
                     was_high_backoff = is_high_backoff
             
-            if len(backoff_history) >= 100:
-                # Check last 100 polls for backoff frequency
+            if len(backoff_history) >= 20:
+                # Check last 20 polls for backoff frequency
                 total_backoffs = sum(backoff_history)
                 if total_backoffs == 0:
-                    # No backoffs in last 100 polls - decrease buffer
+                    # No backoffs in last 20 polls - decrease buffer
                     if BUFFER_SECONDS > 1:
                         BUFFER_SECONDS -= 1
-                        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📉 Decreased buffer to {BUFFER_SECONDS}s (no backoffs in last 100 polls)")
+                        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📉 Decreased buffer to {BUFFER_SECONDS}s (no backoffs in last 20 polls)")
             
             # Calculate next poll time: 60 seconds after last update + adaptive buffer
             # (Only reached if we got new data)
