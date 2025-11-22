@@ -266,6 +266,8 @@ def main():
                     if BUFFER_SECONDS > 1:
                         BUFFER_SECONDS -= 1
                         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📉 Decreased buffer to {BUFFER_SECONDS}s (no backoffs in last 20 polls)")
+                        # Reset history when buffer decreases so next decrease requires 20 polls since this one
+                        backoff_history.clear()
             
             # Calculate next poll time: 60 seconds after last update + adaptive buffer
             # (Only reached if we got new data)
